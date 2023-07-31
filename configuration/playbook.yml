@@ -1,0 +1,148 @@
+---
+- name: Deploy Liftoff Web Application
+  hosts: webservers
+  become: true
+  become_method:
+    ansible.builtin.sudo
+  become_user: ubuntu
+
+  tasks:
+    - name: Updating the cache
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: true
+        autoremove: true
+      changed_when: true
+
+    - name: Installing essential packages
+      ansible.builtin.apt:
+        name:
+          - curl
+          - wget
+          - git
+      changed_when: true
+
+    - name: Installing Nginx
+      ansible.builtin.apt:
+        name:
+          - nginx
+      changed_when: true
+
+    - name: Fetching NodeJS 18 from source
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -sL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+      changed_when: true
+
+    - name: Installing NodeJS
+      ansible.builtin.apt:
+        name:
+          - nodejs
+      changed_when: true
+
+    - name: Installing PM2
+      ansible.builtin.command:
+        cmd: npm install -g pm2
+      changed_when: true
+
+    - name: Pulling app source code from Github
+      ansible.builtin.git:
+        repo: git@github.com:AltSchool-Africa-Group-11/liftoff.git
+        clone: true
+        dest: /home/ubuntu/liftoff
+      changed_when: true
+
+    - name: Installing NPM modules
+      ansible.builtin.command:
+        cmd: npm install
+        path: /home/ubuntu/liftoff
+      changed_when: true
+
+    - name: Copying application to webserver directory
+      ansible.builtin.copy:
+        src: /home/ubuntu/liftoff
+        dest: /var/www/liftoff
+        owner: www-data
+        group: www-data
+        remote_src: true
+        mode: '0755'
+      changed_when: true
+
+    - name: Starting application using PM2
+      ansible.builtin.command:
+        cmd: pm2 start npm --name "liftoff" -- start --watch
+        path: /var/www/liftoff
+      changed_when: true
+
+    - name: Configuring NGINX server block
+      ansible.builtin.blockinfile:
+        path: /etc/nginx/sites-available/liftoff.conf
+        create: true
+        marker: ""
+        block: |
+          server {
+            listen 80;
+            
+            server_name capstone.altschoolafricagroup11.com.ng;
+
+              location / {
+                  proxy_pass http://localhost:3000;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+                  proxy_cache_bypass $http_upgrade;
+              }
+          }
+        owner: root
+        group: root
+        mode: '0644'
+      changed_when: true
+
+    - name: Creating NGINX server block symlink
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/liftoff.conf
+        dest: /etc/nginx/sites-available
+        owner: root
+        group: root
+        state: link
+      changed_when: true
+
+    - name: Testing NGINX server block
+      ansible.builtin.command:
+        cmd: nginx -t
+      changed_when: true
+
+    - name: Restarting NGINX service
+      ansible.builtin.systemd:
+        name: nginx.service
+        state: restarted
+      changed_when: true
+
+    - name: Installing Snap Core
+      community.general.snap:
+        name: core
+        state: present
+      changed_when: true
+
+    - name: Refreshing Snap Core
+      ansible.builtin.command:
+        cmd: snap refresh core
+      changed_when: true
+
+    - name: Installing certbot
+      community.general.snap:
+        name: certbot
+        classic: true
+        state: present
+      changed_when: true
+
+    - name: Preparing certbot command
+      ansible.builtin.command:
+        cmd: ln -s /snap/bin/certbot /usr/bin/certbot
+      changed_when: true
+
+    - name: Issuing Let's Encrypt SSL Certificate
+      ansible.builtin.command
+        cmd: certbot --nginx --agree-tos --redirect -m support@altschoolafricagroup11.com.ng -d capstone.altschoolafricagroup11.com.ng
+      changed_when: true
